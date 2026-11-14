@@ -1,0 +1,7 @@
+{
+  "FullName": "NOBS Tribe Invite",
+  "Description": "Consent-based chat tribe invitations independent of player radial menus; no tribe merging",
+  "Version": 1.0,
+  "MinApiVersion": 2.11,
+  "Dependencies": []
+}
