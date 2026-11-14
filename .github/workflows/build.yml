@@ -1,0 +1,67 @@
+name: NOBS Tribe Invite - Windows x64
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'configs/**'
+      - 'NOBSTribeInvite.vcxproj'
+      - 'NOBSTribeInvite.sln'
+      - 'vcpkg.json'
+      - '.github/workflows/build.yml'
+jobs:
+  build-windows-x64:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: Download ASA API 2.11 SDK and import library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --depth 1 --branch 2.11 https://github.com/ArkServerApi/AsaApi.git extern/AsaApi
+          New-Item -ItemType Directory -Force -Path extern/AsaApi/out_lib | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:RUNNER_TEMP/asa_release | Out-Null
+          gh release download 2.11 --repo ArkServerApi/AsaApi --dir "$env:RUNNER_TEMP/asa_release"
+          Get-ChildItem "$env:RUNNER_TEMP/asa_release" -Recurse -Filter '*.zip' | ForEach-Object {
+            $dest = Join-Path "$env:RUNNER_TEMP/asa_release/extracted" $_.BaseName
+            Expand-Archive -LiteralPath $_.FullName -DestinationPath $dest -Force
+          }
+          $lib = Get-ChildItem "$env:RUNNER_TEMP/asa_release" -Recurse -Filter AsaApi.lib | Select-Object -First 1
+          if (-not $lib) { throw 'Missing AsaApi.lib in ASA API 2.11 release.' }
+          Copy-Item $lib.FullName extern/AsaApi/out_lib/AsaApi.lib -Force
+      - name: Install vcpkg/fmt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP/vcpkg"
+          & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" integrate install
+          $env:VCPKG_ROOT="$env:RUNNER_TEMP/vcpkg"
+          & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" install --triplet x64-windows
+      - name: Compile DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:VCPKG_ROOT="$env:RUNNER_TEMP/vcpkg"
+          msbuild NOBSTribeInvite.sln /m /p:Configuration=Release /p:Platform=x64 /p:VcpkgTriplet=x64-windows /v:minimal
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path out/NOBSTribeInvite.dll)) { throw 'NOBSTribeInvite.dll build failed' }
+      - name: Stage plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist/NOBSTribeInvite | Out-Null
+          Copy-Item out/NOBSTribeInvite.dll dist/NOBSTribeInvite/
+          Copy-Item configs/PluginInfo.json dist/NOBSTribeInvite/
+          if (Test-Path out/NOBSTribeInvite.pdb) { Copy-Item out/NOBSTribeInvite.pdb dist/NOBSTribeInvite/ }
+          $fmt = Get-ChildItem vcpkg_installed -Recurse -Filter fmt.dll | Where-Object { $_.FullName -match '[\\/]bin[\\/]' -and $_.FullName -notmatch '[\\/]debug[\\/]' } | Select-Object -First 1
+          if ($fmt) { Copy-Item $fmt.FullName dist/NOBSTribeInvite/ }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NOBSTribeInvite-Windows-x64-UNTESTED
+          path: dist/NOBSTribeInvite/
